@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>시드 모으기 · AI로 시드 모으는 중</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+html,body{margin:0;height:100%;background:#0D111C;overflow:hidden;font-family:Pretendard,"Apple SD Gothic Neo",system-ui,sans-serif;touch-action:none;user-select:none}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// 시드 모으기: 떨어지는 ₩ 동전 받기, 빨간 '손실' 폭탄 피하기. 목표 1,000만 원
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const DEMO = location.search.includes('demo');  // 영상 녹화용 자동 플레이
+let W, H, DPR;
+function resize() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; g.setTransform(DPR, 0, 0, DPR, 0, 0); }
+addEventListener('resize', resize); resize();
+
+const GOAL = 10000000;
+let state = 'title', seed = 0, lives = 3, items = [], parts = [], pops = [], px = innerWidth / 2, targetX = innerWidth / 2, t = 0, spawnT = 0, best = +(localStorage.getItem('seedBest') || 0), shake = 0;
+function reset() { seed = 0; lives = 3; items = []; parts = []; pops = []; px = targetX = W / 2; t = 0; spawnT = 0; state = 'play'; }
+
+let rnd = (() => { let s = 7; return () => (s = (s * 16807) % 2147483647) / 2147483647; })();
+function spawn() {
+  const bomb = rnd() < Math.min(0.32, 0.12 + t / 300);
+  const big = !bomb && rnd() < 0.15;
+  items.push({ x: 40 + rnd() * (W - 80), y: -40, r: big ? 30 : 22, v: 160 + rnd() * 120 + t * 4, bomb, val: big ? 500000 : 100000, rot: rnd() * 6 });
+}
+const won = n => n.toLocaleString('ko-KR') + '원';
+
+function move(x) { targetX = x; }
+cv.addEventListener('pointerdown', e => { if (state !== 'play') reset(); move(e.clientX); });
+cv.addEventListener('pointermove', e => move(e.clientX));
+addEventListener('keydown', e => { if (e.key === 'ArrowLeft') targetX -= 60; if (e.key === 'ArrowRight') targetX += 60; if (e.key === ' ' && state !== 'play') reset(); });
+
+function burst(x, y, col, n) { for (let i = 0; i < n; i++) parts.push({ x, y, vx: (rnd() - .5) * 420, vy: -rnd() * 380, life: .8, col }); }
+
+function update(dt) {
+  if (state !== 'play') return;
+  t += dt; spawnT -= dt;
+  if (spawnT <= 0) { spawn(); spawnT = Math.max(.28, .8 - t / 60); }
+  if (DEMO) {  // 가장 가까운 동전 쫓고 폭탄은 피하기
+    const coin = items.filter(i => !i.bomb && i.y < H - 90).sort((a, b) => b.y - a.y)[0];
+    const bomb = items.find(i => i.bomb && i.y > H - 260 && Math.abs(i.x - px) < 70);
+    targetX = bomb ? px + (bomb.x < px ? 140 : -140) : coin ? coin.x : W / 2;
+  }
+  targetX = Math.max(50, Math.min(W - 50, targetX));
+  px += (targetX - px) * Math.min(1, dt * 12);
+  const py = H - 70;
+  for (const it of items) {
+    it.y += it.v * dt; it.rot += dt * 3;
+    if (!it.hit && Math.abs(it.x - px) < 55 + it.r * .5 && Math.abs(it.y - py) < 30) {
+      it.hit = true;
+      if (it.bomb) { lives--; shake = .35; burst(it.x, it.y, '#FF5A5A', 26); pops.push({ x: it.x, y: it.y, txt: '손실!', col: '#FF6B6B', life: 1 }); if (lives <= 0) { state = 'over'; best = Math.max(best, seed); try { localStorage.setItem('seedBest', best); } catch (e) {} } }
+      else { seed += it.val; burst(it.x, it.y, '#FFD34D', 14); pops.push({ x: it.x, y: it.y, txt: '+' + won(it.val), col: '#5DF29A', life: 1 }); if (seed >= GOAL) { state = 'win'; best = Math.max(best, seed); } }
+    }
+  }
+  items = items.filter(i => !i.hit && i.y < H + 60);
+  for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; p.life -= dt; }
+  parts = parts.filter(p => p.life > 0);
+  for (const p of pops) { p.y -= 60 * dt; p.life -= dt; }
+  pops = pops.filter(p => p.life > 0);
+  shake = Math.max(0, shake - dt);
+}
+
+function coin(x, y, r, rot) {
+  const sx = Math.abs(Math.cos(rot)) * .6 + .4;
+  g.save(); g.translate(x, y); g.scale(sx, 1);
+  g.fillStyle = '#A86A00'; g.beginPath(); g.arc(0, 4, r, 0, 7); g.fill();
+  const gr = g.createRadialGradient(-r * .3, -r * .4, 2, 0, 0, r); gr.addColorStop(0, '#FFF3B0'); gr.addColorStop(.55, '#F5B700'); gr.addColorStop(1, '#C98A00');
+  g.fillStyle = gr; g.beginPath(); g.arc(0, 0, r, 0, 7); g.fill();
+  g.fillStyle = '#8a5200'; g.font = `800 ${r * 1.2}px Pretendard,sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('₩', 0, 2);
+  g.restore();
+}
+function bomb(x, y, r) {
+  g.save(); g.translate(x, y);
+  g.shadowColor = '#FF3B3B'; g.shadowBlur = 24;
+  const gr = g.createRadialGradient(-r * .3, -r * .3, 2, 0, 0, r); gr.addColorStop(0, '#FF9A9A'); gr.addColorStop(1, '#B3121F');
+  g.fillStyle = gr; g.beginPath(); g.arc(0, 0, r, 0, 7); g.fill();
+  g.shadowBlur = 0; g.fillStyle = '#fff'; g.font = `800 ${r * .62}px Pretendard,sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('손실', 0, 1);
+  g.restore();
+}
+function glass(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); g.fillStyle = 'rgba(255,255,255,.09)'; g.fill(); g.strokeStyle = 'rgba(255,255,255,.28)'; g.lineWidth = 2; g.stroke(); }
+
+function draw() {
+  g.save();
+  if (shake) g.translate((rnd() - .5) * 14 * shake / .35, (rnd() - .5) * 14 * shake / .35);
+  const bg = g.createRadialGradient(W * .75, -H * .1, 0, W * .75, -H * .1, H * 1.1); bg.addColorStop(0, '#13442c'); bg.addColorStop(1, '#0D111C');
+  g.fillStyle = bg; g.fillRect(-20, -20, W + 40, H + 40);
+  g.strokeStyle = 'rgba(255,255,255,.04)'; g.lineWidth = 1;
+  for (let x = 0; x < W; x += 48) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+  for (const it of items) it.bomb ? bomb(it.x, it.y, it.r) : coin(it.x, it.y, it.r, it.rot);
+  // 저금통(받는 바구니)
+  const py = H - 70;
+  g.save(); g.shadowColor = '#2ECC71'; g.shadowBlur = 30;
+  const pg = g.createLinearGradient(0, py - 30, 0, py + 30); pg.addColorStop(0, '#5DF29A'); pg.addColorStop(1, '#1a9c52');
+  g.fillStyle = pg; g.beginPath(); g.roundRect(px - 55, py - 26, 110, 52, 22); g.fill(); g.restore();
+  g.fillStyle = '#0D111C'; g.fillRect(px - 22, py - 24, 44, 6);
+  g.fillStyle = '#06301a'; g.font = '800 18px Pretendard,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('SEED', px, py + 6);
+  for (const p of parts) { g.globalAlpha = Math.max(0, p.life / .8); g.fillStyle = p.col; g.beginPath(); g.arc(p.x, p.y, 4, 0, 7); g.fill(); }
+  g.globalAlpha = 1;
+  for (const p of pops) { g.globalAlpha = Math.max(0, p.life); g.fillStyle = p.col; g.font = '800 22px Pretendard,sans-serif'; g.fillText(p.txt, p.x, p.y - 30); }
+  g.globalAlpha = 1;
+  // 상단 HUD
+  const m = Math.min(560, W - 32), hx = (W - m) / 2;
+  glass(hx, 16, m, 92, 20);
+  g.textAlign = 'left'; g.fillStyle = '#9AA5B8'; g.font = '700 14px Pretendard,sans-serif'; g.fillText('모은 시드', hx + 20, 38);
+  g.fillStyle = '#5DF29A'; g.font = '800 30px Pretendard,sans-serif'; g.fillText(won(seed || 0), hx + 20, 66);
+  g.textAlign = 'right'; g.fillStyle = '#FF6B6B'; g.font = '800 22px Pretendard,sans-serif'; g.fillText('♥'.repeat(Math.max(0, lives || 0)), hx + m - 20, 50);
+  g.fillStyle = 'rgba(255,255,255,.1)'; g.beginPath(); g.roundRect(hx + 20, 84, m - 40, 10, 5); g.fill();
+  g.fillStyle = '#2ECC71'; g.beginPath(); g.roundRect(hx + 20, 84, Math.max(10, (m - 40) * Math.min(1, (seed || 0) / GOAL)), 10, 5); g.fill();
+  g.restore();
+  if (state !== 'play') {
+    g.fillStyle = 'rgba(8,12,22,.72)'; g.fillRect(0, 0, W, H);
+    const bw = Math.min(460, W - 32), bx = (W - bw) / 2, by = H / 2 - 150;
+    glass(bx, by, bw, 300, 28);
+    g.textAlign = 'center'; g.fillStyle = '#5DF29A'; g.font = '800 40px Pretendard,sans-serif';
+    g.fillText(state === 'title' ? '시드 모으기' : state === 'win' ? '천만 원 달성!' : '게임 오버', W / 2, by + 70);
+    g.fillStyle = '#F2F5F8'; g.font = '600 18px Pretendard,sans-serif';
+    g.fillText(state === 'title' ? '₩ 동전은 받고, 빨간 손실은 피하세요' : '모은 시드 ' + won(seed), W / 2, by + 125);
+    g.fillStyle = '#9AA5B8'; g.font = '600 16px Pretendard,sans-serif'; g.fillText('최고 기록 ' + won(best), W / 2, by + 160);
+    g.fillStyle = '#2ECC71'; g.beginPath(); g.roundRect(W / 2 - 110, by + 200, 220, 56, 28); g.fill();
+    g.fillStyle = '#06301a'; g.font = '800 22px Pretendard,sans-serif'; g.fillText(state === 'title' ? '시작하기' : '다시 하기', W / 2, by + 229);
+  }
+}
+
+let last = performance.now();
+function loop(now) { const dt = Math.min(.05, (now - last) / 1000); last = now; update(dt); draw(); requestAnimationFrame(loop); }
+if (DEMO) setTimeout(reset, 1200);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
